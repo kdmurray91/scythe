@@ -30,7 +30,7 @@ static const float default_prior = 0.3;
 #endif
 
 #ifndef VERSION
-#define VERSION 0.992
+#define VERSION 0.993
 #endif
 
 /* Options drawn from GNU's coreutils/src/system.h */
@@ -258,6 +258,8 @@ int main(int argc, char *argv[]) {
 
   kseq_destroy(seq);
   destroy_adapters(aa, MAX_ADAPTERS);
+  if (output_fp != stdout && output_fp != NULL)
+      fclose(output_fp);
   gzclose(fp);
   return 0;
 }
