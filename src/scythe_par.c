@@ -248,26 +248,27 @@ int main(int argc, char *argv[]) {
   /* Loop through entire sequence file. Write trimmed sequences to
      file (or stdout), and record matches in a match file if specifed.
   */
-  kseq_t *seq;
-  seq = kseq_init(fp);
-  #pragma omp parallel default(none) shared(fp, matches_fp, output_fp, stderr, min_keep, need_usage, index, qual_type, prior, min, aa, contaminated, add_tag, total, seq)
+  kseq_t *seq_itr = kseq_init(fp);
+  #pragma omp parallel default(none) shared(fp, matches_fp, output_fp, stderr, min_keep, need_usage, index, qual_type, prior, min, aa, contaminated, add_tag, total, seq_itr)
   {
-    int l, shift;
+    kseq_t *seq1 = calloc(1, sizeof(*seq1));;
+    kseq_t *seq2 = calloc(1, sizeof(*seq2));;
+    int l1, l2, shift1, shift2;
     match *best_match;
     float *qprobs;
-    int our_cont=0, our_total=0;
-    kseq_t *seq_cpy = calloc(1, sizeof(*seq_cpy));
+    int our_cont=0;
     do {
       #pragma omp critical
       {
-        l = kseq_read(seq);
-        cpy_kseq(seq_cpy, seq);
+        l1 = kseq_read(seq_itr);
+        cpy_kseq(seq1, seq_itr);
+        l2 = kseq_read(seq_itr);
+        cpy_kseq(seq2, seq_itr);
       }
-      if (l < 0) {
+      if (l1 < 0) {
         break;
       }
-      shift = -1;
-      if (!seq_cpy->qual.s) {
+      if (!seq1->qual.s) {
         #pragma omp critical
         {
           fputs("Sequence file missing or has malformed quality line.\n", stderr);
@@ -276,38 +277,67 @@ int main(int argc, char *argv[]) {
         if (need_usage) break;
       }
 
-      qprobs = qual_to_probs(seq_cpy->qual.s, qual_type);
-      best_match = find_best_match(aa, seq_cpy->seq.s, qprobs, prior, 0.25, min);
-
+      shift1 = -1;
+      shift2 = -1;
+      qprobs = qual_to_probs(seq1->qual.s, qual_type);
+      best_match = find_best_match(aa, seq1->seq.s, qprobs, prior, 0.25, min);
       if (best_match && best_match->ps->is_contam) {
         our_cont++;
-        shift = best_match->shift;
+        shift1 = best_match->shift;
         #pragma omp critical
         {
-          if (matches_fp) print_match(seq_cpy, best_match, matches_fp, aa, qual_type);
+          if (matches_fp) print_match(seq1, best_match, matches_fp, aa, qual_type);
         }
         /* TODO */
         /* aa->adapters[best_match->adapter_index].occurrences[best_match->n-1]++; */
       }
-
+      if (l2 < 0) {
+        /* We do this check here, in case the file is single ended & has an
+           odd number of seqs */
+        #pragma omp critical
+        {
+          write_fastq(output_fp, seq1, add_tag, shift2, min_keep);
+          total++;
+        }
+        if (best_match) destroy_match(best_match);
+        free(qprobs);
+        break;
+      }
+      if (best_match) destroy_match(best_match);
+      free(qprobs);
+      /* Again with seq2 */
+      shift2 = -1;
+      qprobs = qual_to_probs(seq2->qual.s, qual_type);
+      best_match = find_best_match(aa, seq2->seq.s, qprobs, prior, 0.25, min);
+      if (best_match && best_match->ps->is_contam) {
+        our_cont++;
+        shift2 = best_match->shift;
+        #pragma omp critical
+        {
+          if (matches_fp) print_match(seq2, best_match, matches_fp, aa, qual_type);
+        }
+        /* TODO */
+        /* aa->adapters[best_match->adapter_index].occurrences[best_match->n-1]++; */
+      }
       #pragma omp critical
       {
-        write_fastq(output_fp, seq_cpy, add_tag, shift, min_keep);
-        total++;
+        write_fastq(output_fp, seq1, add_tag, shift1, min_keep);
+        write_fastq(output_fp, seq2, add_tag, shift2, min_keep);
+        total += 2;
       }
       if (best_match) destroy_match(best_match);
       free(qprobs);
     } while (1);
     #pragma omp critical
     {
-      total += our_total;
       contaminated += our_cont;
     }
 
-    kseq_destroy(seq_cpy);
+    kseq_destroy(seq1);
+    kseq_destroy(seq2);
   }
-  kseq_destroy(seq);
-  
+  kseq_destroy(seq_itr);
+
   if (need_usage) {
     usage(EXIT_FAILURE);
   }
